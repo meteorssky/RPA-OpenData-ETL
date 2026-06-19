@@ -10,43 +10,41 @@
     .cbox{width:20px;height:20px;margin-right:10px;border-radius:50%;border:1px solid #ccc;}
     .note{font-size:12px;color:#666;margin-top:10px;border-top:1px solid #eee;padding-top:10px;}
   </style>
-  <script src="https://maps.googleapis.com/maps/api/js?key={{MAPS_KEY}}"></script>
   <script>
+    const geojsonData = {{GEOJSON_DATA}};
     function initMap() {
       const map = new google.maps.Map(document.getElementById("map"), {zoom: 14, center: { lat: 25.079, lng: 121.583 }});
       const infoW = new google.maps.InfoWindow();
 
-      fetch('../data/neihu.geojson').then(r => r.json()).then(data => {
-        data.features.forEach(f => {
-          const p = f.properties, c = f.geometry.coordinates;
-          let col = "gray", z = 1;
-          if (p.含車位) { col = "gray"; z = 0; }
-          else {
-            const pr = p.每坪單價萬元;
-            if (pr < 40) col = "lightblue";
-            else if (pr < 60) col = "green";
-            else if (pr < 80) col = "yellow";
-            else if (pr < 100) col = "orange";
-            else col = "red";
-          }
-          const icon = {path: google.maps.SymbolPath.CIRCLE, fillColor: col, fillOpacity: 0.9, strokeWeight: 1, scale: 8};
-          const marker = new google.maps.Marker({position: new google.maps.LatLng(c[1], c[0]), map: map, icon: icon, title: p.地址, zIndex: z});
-          marker.addListener("click", () => {
-            infoW.setContent(`
-              <div style="font-family:sans-serif;">
-                <h3 style="margin:0 0 5px;">${p.地址}</h3>
-                <p style="margin:2px 0;"><strong>建物型態:</strong> ${p.建物型態}</p>
-                <p style="margin:2px 0;"><strong>每坪單價:</strong> ${p.每坪單價萬元} 萬元/坪</p>
-                <p style="margin:2px 0;"><strong>交易日期:</strong> ${p.交易日期}</p>
-                ${p.含車位 ? '<p style="margin:2px 0;color:#666;">(含車位)</p>' : ''}
-              </div>`);
-            infoW.open(map, marker);
-          });
+      geojsonData.features.forEach(f => {
+        const p = f.properties, c = f.geometry.coordinates;
+        let col = "gray", z = 1;
+        if (p.含車位) { col = "gray"; z = 0; }
+        else {
+          const pr = p.每坪單價萬元;
+          if (pr < 40) col = "lightblue";
+          else if (pr < 60) col = "green";
+          else if (pr < 80) col = "yellow";
+          else if (pr < 100) col = "orange";
+          else col = "red";
+        }
+        const icon = {path: google.maps.SymbolPath.CIRCLE, fillColor: col, fillOpacity: 0.9, strokeWeight: 1, scale: 8};
+        const marker = new google.maps.Marker({position: new google.maps.LatLng(c[1], c[0]), map: map, icon: icon, title: p.地址, zIndex: z});
+        marker.addListener("click", () => {
+          infoW.setContent(`
+            <div style="font-family:sans-serif;">
+              <h3 style="margin:0 0 5px;">${p.地址}</h3>
+              <p style="margin:2px 0;"><strong>建物型態:</strong> ${p.建物型態}</p>
+              <p style="margin:2px 0;"><strong>每坪單價:</strong> ${p.每坪單價萬元} 萬元/坪</p>
+              <p style="margin:2px 0;"><strong>交易日期:</strong> ${p.交易日期}</p>
+              ${p.含車位 ? '<p style="margin:2px 0;color:#666;">(含車位)</p>' : ''}
+            </div>`);
+          infoW.open(map, marker);
         });
       });
     }
-    window.onload = initMap;
   </script>
+  <script src="https://maps.googleapis.com/maps/api/js?key={{MAPS_KEY}}&callback=initMap&loading=async" async defer></script>
 </head>
 <body>
   <div id="map"></div>
