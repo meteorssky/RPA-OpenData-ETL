@@ -176,7 +176,9 @@ if __name__ == "__main__":
     print(f"Median 每坪單價萬元 (excluding 含車位): {median_uprice}")
 
     # 9. Geocode and create GeoJSON
-    maps_key = os.environ.get('MAPS_KEY')
+    raw_maps_key = os.environ.get('MAPS_KEY', '')
+    maps_key = raw_maps_key.strip().strip('"').strip("'")
+
     if maps_key:
         print("Geocoding and generating data/neihu.geojson...")
     else:
@@ -189,10 +191,14 @@ if __name__ == "__main__":
         with open("web/map_template.html", "r", encoding="utf-8") as f:
             html = f.read()
 
-        # Replace placeholders
-        html = html.replace("{{MAPS_KEY}}", maps_key if maps_key else "NO_API_KEY")
-        html = html.replace("{{MEDIAN_PRICE}}", str(median_uprice))
-        html = html.replace("{{GEOJSON_DATA}}", json.dumps(geojson_data, ensure_ascii=False))
+        # Safe JSON dump for embedding in script tag
+        geojson_json = json.dumps(geojson_data, ensure_ascii=False).replace("</script>", "<\\/script>")
+
+        # Replace placeholders using regex to handle potential whitespace in template
+        # Use lambda for replacement to avoid backslash escaping issues in re.sub
+        html = re.sub(r"\{\{\s*MAPS_KEY\s*\}\}", lambda _: maps_key if maps_key else "INVALID_KEY", html)
+        html = re.sub(r"\{\{\s*MEDIAN_PRICE\s*\}\}", lambda _: str(median_uprice), html)
+        html = re.sub(r"\{\{\s*GEOJSON_DATA\s*\}\}", lambda _: geojson_json, html)
 
         with open("web/map.html", "w", encoding="utf-8") as f:
             f.write(html)
