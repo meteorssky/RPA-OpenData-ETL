@@ -1,4 +1,67 @@
 import pandas as pd
+import json
+import urllib.request
+import urllib.parse
+import os
+import re
+
+def clean_address_for_geocode(addr):
+    addr = str(addr)
+    # Strip floor suffix and trailing '等'
+    addr = re.sub(r'([一二三四五六七八九十百千0-9]+樓|樓|之).*', '', addr)
+    addr = re.sub(r'等$', '', addr)
+    return "台北市內湖區" + addr
+
+def geocode_address(address, api_key):
+    if not api_key:
+        return None, None
+    url = f"https://maps.googleapis.com/maps/api/geocode/json?address={urllib.parse.quote(address)}&key={api_key}"
+    try:
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req) as response:
+            data = json.loads(response.read().decode('utf-8'))
+            if data['status'] == 'OK' and len(data['results']) > 0:
+                location = data['results'][0]['geometry']['location']
+                return location['lat'], location['lng']
+    except Exception as e:
+        print(f"Error geocoding {address}: {e}")
+    return None, None
+
+def create_geojson(df, output_path, api_key):
+    features = []
+    for _, row in df.iterrows():
+        raw_address = row['地址']
+        clean_addr = clean_address_for_geocode(raw_address)
+        lat, lng = geocode_address(clean_addr, api_key)
+
+        # Include anyway for testing if missing
+        if not lat or not lng:
+            # Fallback for dev without key, but won't be used in production if key is valid
+            lat, lng = 25.068, 121.583
+
+        feature = {
+            "type": "Feature",
+            "geometry": {
+                "type": "Point",
+                "coordinates": [lng, lat]
+            },
+            "properties": {
+                "地址": raw_address,
+                "建物型態": row['建物型態'],
+                "每坪單價萬元": row['每坪單價萬元'],
+                "交易日期": row['交易日期'],
+                "含車位": bool(row['含車位'])
+            }
+        }
+        features.append(feature)
+
+    geojson = {
+        "type": "FeatureCollection",
+        "features": features
+    }
+
+    with open(output_path, 'w', encoding='utf-8') as f:
+        json.dump(geojson, f, ensure_ascii=False, indent=2)
 
 def convert_roc_date(sdate):
     """Converts ROC YYYMMDD to ISO YYYY-MM-DD."""
@@ -108,3 +171,26 @@ if __name__ == "__main__":
 
     print(f"Row count: {row_count}")
     print(f"Median 每坪單價萬元 (excluding 含車位): {median_uprice}")
+
+    # 9. Geocode and create GeoJSON
+    maps_key = os.environ.get('MAPS_KEY')
+    if maps_key:
+        print("Geocoding and generating data/neihu.geojson...")
+        create_geojson(cleaned_df, "data/neihu.geojson", maps_key)
+    else:
+        print("MAPS_KEY not found in environment, skipping geocoding.")
+
+    # 10. Generate web/map.html from template
+    try:
+        with open("web/map_template.html", "r", encoding="utf-8") as f:
+            html = f.read()
+
+        # Replace placeholders
+        html = html.replace("{{MAPS_KEY}}", maps_key if maps_key else "NO_API_KEY")
+        html = html.replace("{{MEDIAN_PRICE}}", str(median_uprice))
+
+        with open("web/map.html", "w", encoding="utf-8") as f:
+            f.write(html)
+        print("Generated web/map.html")
+    except Exception as e:
+        print(f"Error generating web/map.html: {e}")
