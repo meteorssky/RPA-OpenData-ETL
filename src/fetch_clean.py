@@ -27,7 +27,7 @@ def geocode_address(address, api_key):
         print(f"Error geocoding {address}: {e}")
     return None, None
 
-def create_geojson(df, output_path, api_key):
+def create_geojson(df, api_key, output_path=None):
     features = []
     for _, row in df.iterrows():
         raw_address = row['地址']
@@ -60,8 +60,11 @@ def create_geojson(df, output_path, api_key):
         "features": features
     }
 
-    with open(output_path, 'w', encoding='utf-8') as f:
-        json.dump(geojson, f, ensure_ascii=False, indent=2)
+    if output_path:
+        with open(output_path, 'w', encoding='utf-8') as f:
+            json.dump(geojson, f, ensure_ascii=False, indent=2)
+
+    return geojson
 
 def convert_roc_date(sdate):
     """Converts ROC YYYMMDD to ISO YYYY-MM-DD."""
@@ -176,9 +179,10 @@ if __name__ == "__main__":
     maps_key = os.environ.get('MAPS_KEY')
     if maps_key:
         print("Geocoding and generating data/neihu.geojson...")
-        create_geojson(cleaned_df, "data/neihu.geojson", maps_key)
     else:
-        print("MAPS_KEY not found in environment, skipping geocoding.")
+        print("MAPS_KEY not found in environment, using fallback geocoordinates for geocoding.")
+
+    geojson_data = create_geojson(cleaned_df, maps_key, "data/neihu.geojson")
 
     # 10. Generate web/map.html from template
     try:
@@ -188,6 +192,7 @@ if __name__ == "__main__":
         # Replace placeholders
         html = html.replace("{{MAPS_KEY}}", maps_key if maps_key else "NO_API_KEY")
         html = html.replace("{{MEDIAN_PRICE}}", str(median_uprice))
+        html = html.replace("{{GEOJSON_DATA}}", json.dumps(geojson_data, ensure_ascii=False))
 
         with open("web/map.html", "w", encoding="utf-8") as f:
             f.write(html)
