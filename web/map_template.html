@@ -5,14 +5,124 @@
   <meta charset="utf-8">
   <style>
     body,html,#map{height:100%;margin:0;padding:0;font-family:sans-serif;}
-    .overlay{position:absolute;bottom:20px;left:20px;background:white;padding:15px;border-radius:8px;box-shadow:0 2px 6px rgba(0,0,0,0.3);z-index:5;}
+    .overlay{position:absolute;bottom:20px;right:20px;background:white;padding:15px;border-radius:8px;box-shadow:0 2px 6px rgba(0,0,0,0.3);z-index:5;}
     .legend-item{display:flex;align-items:center;margin-bottom:5px;}
     .cbox{width:20px;height:20px;margin-right:10px;border-radius:50%;border:1px solid #ccc;}
     .note{font-size:12px;color:#666;margin-top:10px;border-top:1px solid #eee;padding-top:10px;}
     #status{position:absolute;top:10px;left:50%;transform:translateX(-50%);background:rgba(255,255,255,0.9);padding:5px 15px;border-radius:20px;box-shadow:0 2px 4px rgba(0,0,0,0.2);z-index:10;display:none;}
+
+    .filter-panel { position:absolute; top:20px; left:20px; width:300px; background:white; padding:15px; border-radius:8px; box-shadow:0 2px 6px rgba(0,0,0,0.3); z-index:5; max-height:calc(100vh - 40px); overflow-y:auto; transition: transform 0.3s ease; }
+    .filter-panel.collapsed { transform: translateX(-340px); }
+    .filter-toggle { position:absolute; top:20px; left:20px; z-index:4; background:white; padding:10px; border-radius:8px; box-shadow:0 2px 6px rgba(0,0,0,0.3); cursor:pointer; font-weight:bold; }
+    .filter-group { margin-bottom: 15px; border-bottom: 1px solid #eee; padding-bottom: 10px; }
+    .filter-group:last-child { border-bottom: none; }
+    .filter-label { font-weight:bold; font-size:14px; margin-bottom:5px; display:block; }
+    .filter-types-container { max-height: 100px; overflow-y: auto; font-size: 13px; }
+    .slider-container { position: relative; width: 100%; height: 30px; margin-top:10px; }
+    .slider-track { position: absolute; width: 100%; height: 5px; background: #ccc; top: 12px; border-radius: 3px; }
+    .slider-range { position: absolute; height: 5px; background: #007bff; top: 12px; border-radius: 3px; }
+    input[type=range] { position: absolute; width: 100%; top: 0; -webkit-appearance: none; appearance: none; background: transparent; pointer-events: none; }
+    input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; height: 16px; width: 16px; border-radius: 50%; background: #007bff; cursor: pointer; pointer-events: auto; }
+    input[type=range]::-moz-range-thumb { height: 16px; width: 16px; border-radius: 50%; background: #007bff; cursor: pointer; pointer-events: auto; border:none; }
+    input[type=text], input[type=date] { width: calc(100% - 10px); padding: 5px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px; margin-bottom: 5px; box-sizing: border-box; }
+    .reset-btn { width: 100%; padding: 8px; background: #f0f0f0; border: 1px solid #ccc; border-radius: 4px; cursor: pointer; margin-top: 10px; font-weight: bold; }
+    .reset-btn:hover { background: #e0e0e0; }
+    .price-display { font-size: 12px; color: #666; text-align: center; margin-top: 5px; }
+    #filter-panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
+    #filter-panel-header h3 { margin: 0; }
+    .close-btn { cursor: pointer; font-size: 18px; color: #666; }
+
   </style>
   <script>
     let map, infoW, dataReady = false, mapsReady = false, sheetData = [];
+
+    let allMarkers = [];
+
+    function updateMedianAndCount(visibleRows) {
+        const validPrices = [];
+        visibleRows.forEach(p => {
+            if (!p.含車位) validPrices.push(p.每坪單價萬元);
+        });
+
+        let medianText = "...";
+        if (validPrices.length) {
+            validPrices.sort((a, b) => a - b);
+            const mid = Math.floor(validPrices.length / 2);
+            const median = validPrices.length % 2 !== 0 ? validPrices[mid] : (validPrices[mid - 1] + validPrices[mid]) / 2;
+            medianText = median.toFixed(2);
+        }
+        document.getElementById('median-val').innerText = medianText;
+        document.getElementById('filter-count').innerText = `顯示 ${visibleRows.length} / 共 ${allMarkers.length} 筆`;
+    }
+
+    function updateSliderUI() {
+        const minVal = parseFloat(document.getElementById('filter-price-min').value);
+        const maxVal = parseFloat(document.getElementById('filter-price-max').value);
+        const minAbs = parseFloat(document.getElementById('filter-price-min').min);
+        const maxAbs = parseFloat(document.getElementById('filter-price-max').max);
+
+        const range = maxAbs - minAbs;
+        if (range <= 0) return;
+        const leftPerc = ((minVal - minAbs) / range) * 100;
+        const rightPerc = 100 - ((maxVal - minAbs) / range) * 100;
+
+        const rangeEl = document.getElementById('price-slider-range');
+        rangeEl.style.left = leftPerc + '%';
+        rangeEl.style.right = rightPerc + '%';
+        document.getElementById('price-display').innerText = `${minVal} - ${maxVal} 萬元/坪`;
+    }
+
+    function handleSliderInput(e) {
+        let minEl = document.getElementById('filter-price-min');
+        let maxEl = document.getElementById('filter-price-max');
+        let minVal = parseFloat(minEl.value);
+        let maxVal = parseFloat(maxEl.value);
+
+        if (e.target.id === 'filter-price-min' && minVal > maxVal) {
+            minEl.value = maxVal;
+        } else if (e.target.id === 'filter-price-max' && maxVal < minVal) {
+            maxEl.value = minVal;
+        }
+        updateSliderUI();
+        applyFilters(false);
+    }
+
+    function applyFilters(isInitial) {
+        const typesChecked = Array.from(document.querySelectorAll('#filter-types input:checked')).map(cb => cb.value);
+        const priceMin = parseFloat(document.getElementById('filter-price-min').value);
+        const priceMax = parseFloat(document.getElementById('filter-price-max').value);
+        const showParking = document.getElementById('filter-parking').checked;
+        const dateFrom = document.getElementById('filter-date-from').value;
+        const dateTo = document.getElementById('filter-date-to').value;
+        const addrKw = document.getElementById('filter-address').value.trim().toLowerCase();
+
+        const visibleRows = [];
+        const bounds = new google.maps.LatLngBounds();
+
+        allMarkers.forEach(item => {
+            const p = item.data;
+            let show = true;
+
+            if (!typesChecked.includes(p.建物型態)) show = false;
+            if (p.每坪單價萬元 < priceMin || p.每坪單價萬元 > priceMax) show = false;
+            if (!showParking && p.含車位) show = false;
+            if (dateFrom && p.交易日期 < dateFrom) show = false;
+            if (dateTo && p.交易日期 > dateTo) show = false;
+            if (addrKw && !p.地址.toLowerCase().includes(addrKw)) show = false;
+
+            item.marker.setVisible(show);
+            if (show) {
+                visibleRows.push(p);
+                if (isInitial) bounds.extend(item.marker.getPosition());
+            }
+        });
+
+        updateMedianAndCount(visibleRows);
+        if (isInitial && !bounds.isEmpty()) {
+            map.fitBounds(bounds);
+        }
+    }
+
     // The Sheet must be shared as "anyone with the link can view"
     async function fetchData() {
       const status = document.getElementById('status');
@@ -48,9 +158,54 @@
       if (!mapsReady || !dataReady) return;
       map = new google.maps.Map(document.getElementById("map"), {zoom: 14, center: { lat: 25.079, lng: 121.583 }});
       infoW = new google.maps.InfoWindow();
-      const validPrices = [];
+
+      const typesSet = new Set();
+      let minP = Infinity, maxP = -Infinity;
+
       sheetData.forEach(p => {
-        if (!p.含車位) validPrices.push(p.每坪單價萬元);
+          typesSet.add(p.建物型態);
+          if (p.每坪單價萬元 < minP) minP = p.每坪單價萬元;
+          if (p.每坪單價萬元 > maxP) maxP = p.每坪單價萬元;
+      });
+
+      const typesDiv = document.getElementById('filter-types');
+      Array.from(typesSet).sort().forEach(t => {
+          const lbl = document.createElement('label');
+          lbl.style.display = 'block';
+          lbl.innerHTML = `<input type="checkbox" value="${t}" checked style="margin-right:5px;" onchange="applyFilters(false)"> ${t}`;
+          typesDiv.appendChild(lbl);
+      });
+
+      if (minP === Infinity) { minP = 0; maxP = 100; }
+      const minEl = document.getElementById('filter-price-min');
+      const maxEl = document.getElementById('filter-price-max');
+      minEl.min = Math.floor(minP); minEl.max = Math.ceil(maxP);
+      maxEl.min = Math.floor(minP); maxEl.max = Math.ceil(maxP);
+      minEl.value = Math.floor(minP); maxEl.value = Math.ceil(maxP);
+
+      minEl.addEventListener('input', handleSliderInput);
+      maxEl.addEventListener('input', handleSliderInput);
+      document.getElementById('filter-parking').addEventListener('change', () => applyFilters(false));
+      document.getElementById('filter-date-from').addEventListener('change', () => applyFilters(false));
+      document.getElementById('filter-date-to').addEventListener('change', () => applyFilters(false));
+      document.getElementById('filter-address').addEventListener('input', () => applyFilters(false));
+
+      document.getElementById('filter-reset').addEventListener('click', () => {
+          document.querySelectorAll('#filter-types input').forEach(cb => cb.checked = true);
+          minEl.value = minEl.min;
+          maxEl.value = maxEl.max;
+          document.getElementById('filter-parking').checked = false;
+          document.getElementById('filter-date-from').value = '';
+          document.getElementById('filter-date-to').value = '';
+          document.getElementById('filter-address').value = '';
+          updateSliderUI();
+          applyFilters(true);
+      });
+
+      updateSliderUI();
+      allMarkers = [];
+
+      sheetData.forEach(p => {
         let col = "gray", z = p.含車位 ? 0 : 1;
         if (!p.含車位) {
           const pr = p.每坪單價萬元;
@@ -68,19 +223,64 @@
             `${p.含車位 ? '<p style="margin:2px 0;color:#666;">(含車位)</p>' : ''}</div>`);
           infoW.open(map, marker);
         });
+        allMarkers.push({marker: marker, data: p});
       });
-      if (validPrices.length) {
-        validPrices.sort((a, b) => a - b);
-        const mid = Math.floor(validPrices.length / 2);
-        const median = validPrices.length % 2 !== 0 ? validPrices[mid] : (validPrices[mid - 1] + validPrices[mid]) / 2;
-        document.getElementById('median-val').innerText = median.toFixed(2);
-      }
+
+      applyFilters(true);
     }
     window.onload = fetchData;
   </script>
 </head>
 <body>
   <div id="status"></div>
+
+  <div class="filter-toggle" id="filter-toggle" onclick="document.getElementById('filter-panel').classList.remove('collapsed'); this.style.display='none';">過濾器</div>
+  <div class="filter-panel" id="filter-panel">
+    <div id="filter-panel-header">
+      <h3>資料過濾</h3>
+      <span class="close-btn" onclick="document.getElementById('filter-panel').classList.add('collapsed'); document.getElementById('filter-toggle').style.display='block';">&times;</span>
+    </div>
+
+    <div class="filter-group">
+      <span class="filter-label">建物型態</span>
+      <div class="filter-types-container" id="filter-types"></div>
+    </div>
+
+    <div class="filter-group">
+      <span class="filter-label">每坪單價 (萬元)</span>
+      <div class="slider-container">
+        <div class="slider-track"></div>
+        <div class="slider-range" id="price-slider-range"></div>
+        <input type="range" id="filter-price-min" value="0">
+        <input type="range" id="filter-price-max" value="100">
+      </div>
+      <div class="price-display" id="price-display">...</div>
+    </div>
+
+    <div class="filter-group">
+      <label class="filter-label" style="display:flex; align-items:center;">
+        <input type="checkbox" id="filter-parking" style="margin-right:5px;"> 顯示含車位點
+      </label>
+    </div>
+
+    <div class="filter-group">
+      <span class="filter-label">交易日期</span>
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <input type="date" id="filter-date-from" style="width:45%;">
+        <span>-</span>
+        <input type="date" id="filter-date-to" style="width:45%;">
+      </div>
+    </div>
+
+    <div class="filter-group">
+      <span class="filter-label">地址關鍵字</span>
+      <input type="text" id="filter-address" placeholder="例如: 內湖路">
+    </div>
+
+    <div style="text-align:center; font-weight:bold; margin-top:10px;" id="filter-count">顯示 0 / 共 0 筆</div>
+    <button class="reset-btn" id="filter-reset">重設</button>
+  </div>
+
   <div id="map"></div>
   <script src="https://maps.googleapis.com/maps/api/js?key={{ MAPS_KEY }}&callback=initMap&loading=async" async defer></script>
   <div class="overlay">
