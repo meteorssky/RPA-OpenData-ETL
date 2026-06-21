@@ -2,9 +2,10 @@ import pandas as pd
 import pytest
 import sys
 import os
+from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
-from fetch_clean import convert_roc_date, clean_data, normalize_buitype
+from fetch_clean import convert_roc_date, clean_data, normalize_buitype, process_geocoding
 
 def test_convert_roc_date():
     assert convert_roc_date(1150411) == "2026-04-11"
@@ -77,3 +78,36 @@ def test_has_parking_flag():
     assert not cleaned_df.iloc[0]['含車位']
     assert not cleaned_df.iloc[1]['含車位']
     assert cleaned_df.iloc[2]['含車位']
+
+def test_process_geocoding_success():
+    data = {
+        '地址': ['addr1'],
+        '每坪單價萬元': [50],
+        '含車位': [False]
+    }
+    df = pd.DataFrame(data)
+
+    with patch('fetch_clean.geocode_address') as mock_geocode:
+        mock_geocode.return_value = (25.0, 121.0)
+        result_df = process_geocoding(df, 'fake_key')
+
+    assert len(result_df) == 1
+    assert result_df.iloc[0]['緯度'] == 25.0
+    assert result_df.iloc[0]['經度'] == 121.0
+
+def test_process_geocoding_failure_skips_row():
+    data = {
+        '地址': ['addr1', 'addr2'],
+        '每坪單價萬元': [50, 60],
+        '含車位': [False, False]
+    }
+    df = pd.DataFrame(data)
+
+    with patch('fetch_clean.geocode_address') as mock_geocode:
+        # Mock success for first, failure for second
+        mock_geocode.side_effect = [(25.0, 121.0), (None, None)]
+        result_df = process_geocoding(df, 'fake_key')
+
+    assert len(result_df) == 1
+    assert result_df.iloc[0]['地址'] == 'addr1'
+    assert 'addr2' not in result_df['地址'].values
