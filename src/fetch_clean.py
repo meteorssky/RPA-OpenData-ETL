@@ -23,48 +23,11 @@ def geocode_address(address, api_key):
             if data['status'] == 'OK' and len(data['results']) > 0:
                 location = data['results'][0]['geometry']['location']
                 return location['lat'], location['lng']
+            else:
+                print(f"Geocoding failed for {address}: {data.get('status')}")
     except Exception as e:
         print(f"Error geocoding {address}: {e}")
     return None, None
-
-def create_geojson(df, api_key, output_path=None):
-    features = []
-    for _, row in df.iterrows():
-        raw_address = row['地址']
-        clean_addr = clean_address_for_geocode(raw_address)
-        lat, lng = geocode_address(clean_addr, api_key)
-
-        # Include anyway for testing if missing
-        if not lat or not lng:
-            # Fallback for dev without key, but won't be used in production if key is valid
-            lat, lng = 25.068, 121.583
-
-        feature = {
-            "type": "Feature",
-            "geometry": {
-                "type": "Point",
-                "coordinates": [lng, lat]
-            },
-            "properties": {
-                "地址": raw_address,
-                "建物型態": row['建物型態'],
-                "每坪單價萬元": row['每坪單價萬元'],
-                "交易日期": row['交易日期'],
-                "含車位": bool(row['含車位'])
-            }
-        }
-        features.append(feature)
-
-    geojson = {
-        "type": "FeatureCollection",
-        "features": features
-    }
-
-    if output_path:
-        with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(geojson, f, ensure_ascii=False, indent=2)
-
-    return geojson
 
 def convert_roc_date(sdate):
     """Converts ROC YYYMMDD to ISO YYYY-MM-DD."""
@@ -102,13 +65,6 @@ def normalize_buitype(btype):
 def clean_data(df):
     """
     Cleans the Taiwan real-estate data according to specifications.
-
-    1. Filter: CASE_T=='買賣', DISTRICT=='內湖區', CASE_F not in ('土地','車位').
-    2. Drop rows where UPRICE is empty, NaN, or '0'.
-    3. Convert SDATE (ROC) to ISO format.
-    4. Add '含車位' boolean column based on UPNOTE == '是'.
-    5. Normalize BUITYPE.
-    6. Rename and select specific columns.
     """
     # Filter 1: CASE_T, DISTRICT, CASE_F
     df = df[(df['CASE_T'] == '買賣') &
@@ -116,14 +72,6 @@ def clean_data(df):
             (~df['CASE_F'].isin(['土地', '車位']))].copy()
 
     # Filter 2: UPRICE is not empty or '0'
-    # Ensure UPRICE is handled as string initially to catch empty strings, then convert appropriately
-    # Some might be numeric so handle carefully
-    # Fill NA with empty string first to make string operations safe if they are objects
-    # Or just use pd.to_numeric with coerce
-
-    # Check if empty string or '0' (or 0)
-    # First, let's convert to numeric, coercing errors to NaN. Then drop NaNs and 0s.
-    # UPRICE could be float
     df['UPRICE'] = pd.to_numeric(df['UPRICE'], errors='coerce')
     df = df[df['UPRICE'].notna()]
     df = df[df['UPRICE'] > 0]
@@ -148,9 +96,41 @@ def clean_data(df):
     })
 
     # Select columns
-    target_columns = ['交易日期', '建物型態', '總價萬元', '每坪單價萬元', '建物面積坪', '含車位', '地址']
+    target_columns = ['交易日期', '建物型態', '每坪單價萬元', '含車位', '地址']
+    # Check if 緯度/經度 already exist (unlikely in raw data but good for robustness)
+    if '緯度' in df.columns and '經度' in df.columns:
+        target_columns += ['緯度', '經度']
+
     df = df[target_columns]
 
+    return df
+
+def process_geocoding(df, maps_key):
+    lats = []
+    lngs = []
+    indices_to_drop = []
+
+    for idx, row in df.iterrows():
+        # Only geocode if missing
+        if '緯度' in row and '經度' in row and not pd.isna(row['緯度']) and not pd.isna(row['經度']):
+            lats.append(row['緯度'])
+            lngs.append(row['經度'])
+            continue
+
+        raw_address = row['地址']
+        clean_addr = clean_address_for_geocode(raw_address)
+        lat, lng = geocode_address(clean_addr, maps_key)
+
+        if lat is not None and lng is not None:
+            lats.append(lat)
+            lngs.append(lng)
+        else:
+            print(f"Skipping row {idx}: failed to geocode {raw_address}")
+            indices_to_drop.append(idx)
+
+    df = df.drop(indices_to_drop)
+    df['緯度'] = lats
+    df['經度'] = lngs
     return df
 
 if __name__ == "__main__":
@@ -163,42 +143,33 @@ if __name__ == "__main__":
     # 2-7. Clean data
     cleaned_df = clean_data(df)
 
+    # 8. Geocode
+    maps_key = os.environ.get('MAPS_KEY')
+    if not maps_key:
+        print("Warning: MAPS_KEY not found in environment.")
+
+    cleaned_df = process_geocoding(cleaned_df, maps_key)
+
     # Save output
     cleaned_df.to_csv(output_file, index=False, encoding='utf-8-sig')
 
-    # 8. Print stats
+    # 9. Print stats
     row_count = len(cleaned_df)
-    # Median EXCLUDING 含車位 rows
     df_no_park = cleaned_df[~cleaned_df['含車位']]
     median_uprice = df_no_park['每坪單價萬元'].median()
 
     print(f"Row count: {row_count}")
     print(f"Median 每坪單價萬元 (excluding 含車位): {median_uprice}")
 
-    # 9. Geocode and create GeoJSON
-    raw_maps_key = os.environ.get('MAPS_KEY', '')
-    maps_key = raw_maps_key.strip().strip('"').strip("'")
-
-    if maps_key:
-        print("Geocoding and generating data/neihu.geojson...")
-    else:
-        print("MAPS_KEY not found in environment, using fallback geocoordinates for geocoding.")
-
-    geojson_data = create_geojson(cleaned_df, maps_key, "data/neihu.geojson")
-
     # 10. Generate web/map.html from template
     try:
         with open("web/map_template.html", "r", encoding="utf-8") as f:
             html = f.read()
 
-        # Safe JSON dump for embedding in script tag
-        geojson_json = json.dumps(geojson_data, ensure_ascii=False).replace("</script>", "<\\/script>")
-
-        # Replace placeholders using regex to handle potential whitespace in template
-        # Use lambda for replacement to avoid backslash escaping issues in re.sub
-        html = re.sub(r"\{\{\s*MAPS_KEY\s*\}\}", lambda _: maps_key if maps_key else "INVALID_KEY", html)
-        html = re.sub(r"\{\{\s*MEDIAN_PRICE\s*\}\}", lambda _: str(median_uprice), html)
-        html = re.sub(r"\{\{\s*GEOJSON_DATA\s*\}\}", lambda _: geojson_json, html)
+        # Replace placeholders
+        html = html.replace("{{MAPS_KEY}}", maps_key if maps_key else "NO_API_KEY")
+        html = html.replace("{{SHEET_ID}}", os.environ.get('SHEET_ID', ''))
+        html = html.replace("{{SHEETS_KEY}}", os.environ.get('SHEETS_KEY', ''))
 
         with open("web/map.html", "w", encoding="utf-8") as f:
             f.write(html)

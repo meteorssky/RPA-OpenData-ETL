@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>內湖 Sales</title>
+  <title>內湖 Sales (Live)</title>
   <meta charset="utf-8">
   <style>
     body,html,#map{height:100%;margin:0;padding:0;font-family:sans-serif;}
@@ -9,65 +9,83 @@
     .legend-item{display:flex;align-items:center;margin-bottom:5px;}
     .cbox{width:20px;height:20px;margin-right:10px;border-radius:50%;border:1px solid #ccc;}
     .note{font-size:12px;color:#666;margin-top:10px;border-top:1px solid #eee;padding-top:10px;}
+    #status{position:absolute;top:10px;left:50%;transform:translateX(-50%);background:rgba(255,255,255,0.9);padding:5px 15px;border-radius:20px;box-shadow:0 2px 4px rgba(0,0,0,0.2);z-index:10;display:none;}
   </style>
   <script>
-    window.geojsonData = {{ GEOJSON_DATA }};
-    window.initMap = function() {
-      const map = new google.maps.Map(document.getElementById("map"), {
-        zoom: 14,
-        center: { lat: 25.079, lng: 121.583 }
-      });
-      const infoW = new google.maps.InfoWindow();
-
-      if (window.geojsonData && window.geojsonData.features) {
-        window.geojsonData.features.forEach(f => {
-          const p = f.properties, c = f.geometry.coordinates;
-          let col = "gray", z = 1;
-          if (p.含車位) { col = "gray"; z = 0; }
-          else {
-            const pr = p.每坪單價萬元;
-            if (pr < 40) col = "lightblue";
-            else if (pr < 60) col = "green";
-            else if (pr < 80) col = "yellow";
-            else if (pr < 100) col = "orange";
-            else col = "red";
-          }
-          const icon = {
-            path: google.maps.SymbolPath.CIRCLE,
-            fillColor: col,
-            fillOpacity: 0.9,
-            strokeWeight: 1,
-            scale: 8
-          };
-          const marker = new google.maps.Marker({
-            position: new google.maps.LatLng(c[1], c[0]),
-            map: map,
-            icon: icon,
-            title: p.地址,
-            zIndex: z
+    let map, infoW, dataReady = false, mapsReady = false, sheetData = [];
+    // The Sheet must be shared as "anyone with the link can view"
+    async function fetchData() {
+      const status = document.getElementById('status');
+      status.style.display = 'block';
+      status.innerText = 'Loading data...';
+      const url = `https://sheets.googleapis.com/v4/spreadsheets/{{SHEET_ID}}/values/A1:Z100?key={{SHEETS_KEY}}`;
+      try {
+        const resp = await fetch(url);
+        const data = await resp.json();
+        if (data.error) throw new Error(data.error.message);
+        const rows = data.values;
+        const headers = rows[0];
+        sheetData = rows.slice(1).map(row => {
+          let obj = {};
+          headers.forEach((h, i) => {
+            let val = row[i];
+            if (h === '每坪單價萬元' || h === '緯度' || h === '經度') val = parseFloat(val);
+            if (h === '含車位') val = (val === 'True');
+            obj[h] = val;
           });
-          marker.addListener("click", () => {
-            infoW.setContent(`
-              <div style="font-family:sans-serif;">
-                <h3 style="margin:0 0 5px;">${p.地址}</h3>
-                <p style="margin:2px 0;"><strong>建物型態:</strong> ${p.建物型態}</p>
-                <p style="margin:2px 0;"><strong>每坪單價:</strong> ${p.每坪單價萬元} 萬元/坪</p>
-                <p style="margin:2px 0;"><strong>交易日期:</strong> ${p.交易日期}</p>
-                ${p.含車位 ? '<p style="margin:2px 0;color:#666;">(含車位)</p>' : ''}
-              </div>`);
-            infoW.open(map, marker);
-          });
+          return obj;
         });
+        dataReady = true;
+        status.style.display = 'none';
+        checkAndInit();
+      } catch (e) {
+        status.innerText = 'Error: ' + e.message;
+        status.style.color = 'red';
       }
-    };
+    }
+    function initMap() { mapsReady = true; checkAndInit(); }
+    function checkAndInit() {
+      if (!mapsReady || !dataReady) return;
+      map = new google.maps.Map(document.getElementById("map"), {zoom: 14, center: { lat: 25.079, lng: 121.583 }});
+      infoW = new google.maps.InfoWindow();
+      const validPrices = [];
+      sheetData.forEach(p => {
+        if (!p.含車位) validPrices.push(p.每坪單價萬元);
+        let col = "gray", z = p.含車位 ? 0 : 1;
+        if (!p.含車位) {
+          const pr = p.每坪單價萬元;
+          col = pr < 40 ? "lightblue" : pr < 60 ? "green" : pr < 80 ? "yellow" : pr < 100 ? "orange" : "red";
+        }
+        const marker = new google.maps.Marker({
+          position: {lat: p.緯度, lng: p.經度}, map, zIndex: z,
+          icon: {path: google.maps.SymbolPath.CIRCLE, fillColor: col, fillOpacity: 0.9, strokeWeight: 1, scale: 8}
+        });
+        marker.addListener("click", () => {
+          infoW.setContent(`<div style="font-family:sans-serif;"><h3 style="margin:0 0 5px;">${p.地址}</h3>` +
+            `<p style="margin:2px 0;"><strong>建物型態:</strong> ${p.建物型態}</p>` +
+            `<p style="margin:2px 0;"><strong>每坪單價:</strong> ${p.每坪單價萬元} 萬元/坪</p>` +
+            `<p style="margin:2px 0;"><strong>交易日期:</strong> ${p.交易日期}</p>` +
+            `${p.含車位 ? '<p style="margin:2px 0;color:#666;">(含車位)</p>' : ''}</div>`);
+          infoW.open(map, marker);
+        });
+      });
+      if (validPrices.length) {
+        validPrices.sort((a, b) => a - b);
+        const mid = Math.floor(validPrices.length / 2);
+        const median = validPrices.length % 2 !== 0 ? validPrices[mid] : (validPrices[mid - 1] + validPrices[mid]) / 2;
+        document.getElementById('median-val').innerText = median.toFixed(2);
+      }
+    }
+    window.onload = fetchData;
   </script>
 </head>
 <body>
+  <div id="status"></div>
   <div id="map"></div>
   <script src="https://maps.googleapis.com/maps/api/js?key={{ MAPS_KEY }}&callback=initMap&loading=async" async defer></script>
   <div class="overlay">
-    <h3 style="margin-top:0;">內湖區 Sales Data</h3>
-    <div><strong>Median Price:</strong> {{MEDIAN_PRICE}} 萬元/坪 (Excl. Park)</div>
+    <h3 style="margin-top:0;">內湖區 Sales (Live)</h3>
+    <div><strong>Median Price:</strong> <span id="median-val">...</span> 萬元/坪 (Excl. Park)</div>
     <div style="margin-top:10px;">
       <div class="legend-item"><div class="cbox" style="background:lightblue;"></div>&lt; 40 萬元/坪</div>
       <div class="legend-item"><div class="cbox" style="background:green;"></div>40 - 60 萬元/坪</div>
@@ -76,7 +94,7 @@
       <div class="legend-item"><div class="cbox" style="background:red;"></div>&ge; 100 萬元/坪</div>
       <div class="legend-item"><div class="cbox" style="background:gray;"></div>含車位 (Exc. Med)</div>
     </div>
-    <div class="note">* Positions approximate.<br>* ONE WEEK of data (~34 points).</div>
+    <div class="note">* Positions approximate.<br>* Data loaded LIVE from Sheet.</div>
   </div>
 </body>
 </html>
