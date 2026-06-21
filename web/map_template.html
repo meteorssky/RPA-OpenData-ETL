@@ -32,11 +32,73 @@
     #filter-panel-header h3 { margin: 0; }
     .close-btn { cursor: pointer; font-size: 18px; color: #666; }
 
+    .time-player { position:absolute; bottom:20px; left:50%; transform:translateX(-50%); background:white; padding:10px 20px; border-radius:8px; box-shadow:0 2px 6px rgba(0,0,0,0.3); z-index:6; display:flex; align-items:center; width:90%; max-width:600px; box-sizing:border-box; }
+    .tp-play-btn { background:#007bff; color:white; border:none; border-radius:4px; padding:6px 12px; cursor:pointer; font-weight:bold; margin-right:15px; min-width: 60px; text-align: center; }
+    .tp-play-btn:hover { background:#0056b3; }
+    .tp-slider-wrapper { flex-grow:1; display:flex; align-items:center; margin:0 15px; position:relative; }
+    .tp-slider-wrapper input[type=range] { position:relative; pointer-events:auto; width:100%; height: 5px; -webkit-appearance: none; background: #ccc; border-radius: 3px; outline: none; }
+    .tp-slider-wrapper input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 16px; height: 16px; border-radius: 50%; background: #007bff; cursor: pointer; }
+    .tp-slider-wrapper input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 50%; background: #007bff; cursor: pointer; border:none; }
+    .tp-date-label { font-weight:bold; font-size:14px; min-width:90px; text-align:center; }
+    .tp-speed-select { padding:4px; border-radius:4px; border:1px solid #ccc; margin-left:15px; font-size:13px; }
+
+    @media (max-width: 768px) {
+      .overlay { bottom: 80px; }
+      .time-player { bottom: 10px; width: 95%; padding: 8px 10px; }
+      .tp-speed-select { margin-left: 5px; }
+      .tp-play-btn { margin-right: 10px; min-width: 50px; }
+      .tp-slider-wrapper { margin: 0 10px; }
+    }
   </style>
   <script>
     let map, infoW, dataReady = false, mapsReady = false, sheetData = [];
 
     let allMarkers = [];
+    let distinctDates = [], currentPlaybackIndex = -1, playbackTimer = null, baseIntervalMs = 700;
+
+    function togglePlayback() {
+        if (playbackTimer !== null) {
+            pausePlayback();
+        } else {
+            if (currentPlaybackIndex >= distinctDates.length - 1) {
+                currentPlaybackIndex = -1;
+                updateTimePlayerUI();
+            }
+            startPlayback();
+        }
+    }
+
+    function startPlayback() {
+        const speed = parseFloat(document.getElementById('tp-speed-select').value) || 1;
+        const intervalMs = baseIntervalMs / speed;
+        document.getElementById('tp-play-btn').innerText = 'Pause';
+
+        playbackTimer = setInterval(() => {
+            currentPlaybackIndex++;
+            if (currentPlaybackIndex >= distinctDates.length - 1) {
+                currentPlaybackIndex = distinctDates.length - 1;
+                updateTimePlayerUI();
+                pausePlayback();
+            } else {
+                updateTimePlayerUI();
+            }
+        }, intervalMs);
+    }
+
+    function pausePlayback() {
+        clearInterval(playbackTimer);
+        playbackTimer = null;
+        document.getElementById('tp-play-btn').innerText = 'Play';
+    }
+
+    function updateTimePlayerUI() {
+        if (currentPlaybackIndex >= -1 && distinctDates.length > 0) {
+            const displayIndex = Math.max(0, currentPlaybackIndex);
+            document.getElementById('tp-slider').value = currentPlaybackIndex;
+            document.getElementById('tp-date-label').innerText = distinctDates[displayIndex];
+            applyFilters(false);
+        }
+    }
 
     function updateMedianAndCount(visibleRows) {
         const validPrices = [];
@@ -109,6 +171,10 @@
             if (dateFrom && p.交易日期 < dateFrom) show = false;
             if (dateTo && p.交易日期 > dateTo) show = false;
             if (addrKw && !p.地址.toLowerCase().includes(addrKw)) show = false;
+
+            if (currentPlaybackIndex >= 0 && distinctDates.length > 0) {
+                if (p.交易日期 > distinctDates[currentPlaybackIndex]) show = false;
+            }
 
             item.marker.setVisible(show);
             if (show) {
@@ -199,11 +265,51 @@
           document.getElementById('filter-date-to').value = '';
           document.getElementById('filter-address').value = '';
           updateSliderUI();
+
+          if (distinctDates.length > 0) {
+              currentPlaybackIndex = distinctDates.length - 1;
+              document.getElementById('tp-slider').value = currentPlaybackIndex;
+              document.getElementById('tp-date-label').innerText = distinctDates[currentPlaybackIndex];
+              if (playbackTimer !== null) pausePlayback();
+          }
           applyFilters(true);
       });
 
       updateSliderUI();
       allMarkers = [];
+
+      const datesSet = new Set();
+      sheetData.forEach(p => {
+        if (p.交易日期) datesSet.add(p.交易日期);
+      });
+      distinctDates = Array.from(datesSet).sort();
+
+      const tpPlayer = document.getElementById('time-player');
+      const tpSlider = document.getElementById('tp-slider');
+      const tpDateLabel = document.getElementById('tp-date-label');
+      const tpPlayBtn = document.getElementById('tp-play-btn');
+      const tpSpeedSelect = document.getElementById('tp-speed-select');
+
+      if (distinctDates.length > 0) {
+        tpPlayer.style.display = 'flex';
+        tpSlider.max = distinctDates.length - 1;
+        tpSlider.value = distinctDates.length - 1;
+        currentPlaybackIndex = distinctDates.length - 1;
+        tpDateLabel.innerText = distinctDates[currentPlaybackIndex];
+
+        tpPlayBtn.addEventListener('click', togglePlayback);
+        tpSlider.addEventListener('input', (e) => {
+          currentPlaybackIndex = parseInt(e.target.value);
+          if (playbackTimer !== null) pausePlayback();
+          updateTimePlayerUI();
+        });
+        tpSpeedSelect.addEventListener('change', () => {
+          if (playbackTimer !== null) {
+            pausePlayback();
+            startPlayback();
+          }
+        });
+      }
 
       sheetData.forEach(p => {
         let col = "gray", z = p.含車位 ? 0 : 1;
@@ -295,6 +401,20 @@
       <div class="legend-item"><div class="cbox" style="background:gray;"></div>含車位 (Exc. Med)</div>
     </div>
     <div class="note">* Positions approximate.<br>* Data loaded LIVE from Sheet.</div>
+  </div>
+
+  <div class="time-player" id="time-player" style="display:none;">
+    <button class="tp-play-btn" id="tp-play-btn">Play</button>
+    <div class="tp-slider-wrapper">
+      <input type="range" id="tp-slider" min="0" max="100" value="100">
+    </div>
+    <span class="tp-date-label" id="tp-date-label">YYYY-MM-DD</span>
+    <select class="tp-speed-select" id="tp-speed-select">
+      <option value="0.5">0.5x</option>
+      <option value="1" selected>1.0x</option>
+      <option value="2">2.0x</option>
+      <option value="5">5.0x</option>
+    </select>
   </div>
 </body>
 </html>
